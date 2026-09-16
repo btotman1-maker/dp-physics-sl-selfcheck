@@ -174,9 +174,10 @@ footer{margin-top:32px;padding-top:15px;border-top:1px solid var(--line);
 <div class="who">
   <label for="em">Your school email</label>
   <input id="em" type="email" inputmode="email" autocomplete="email"
-         spellcheck="false" placeholder="name@student.ycis-hk.edu.hk">
-  <p>Each code is stamped with your address, so a code only counts for the person
-     it was made for. It is used here in the page and nowhere else.</p>
+         spellcheck="false" placeholder="200123456@hkstudent.ycis.com">
+  <p>Your student number, then <b>@hkstudent.ycis.com</b> &mdash; the same address you
+     sign in to Teams with. Each code is stamped with it, so a code only counts for the
+     person it was made for. It is used here in the page and nowhere else.</p>
 </div>
 
 <div class="bank" id="bank">
@@ -412,7 +413,16 @@ function checkLetters(payload){
 const who = () => (document.getElementById("em").value || "").trim().toLowerCase();
 const whoOK = () => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(who());
 
-function makeCode(nc, nw, fc, fw, best, tries){
+/* Fixed width, most significant first, so the decoder can read it with one
+   MID() and the field never changes length. Six characters hold 26 questions,
+   which is the largest section on the page. */
+function b36pad(v, n){
+  let s = "";
+  for(let i = 0; i < n; i++){ s = A36[v % 36] + s; v = Math.floor(v / 36); }
+  return s;
+}
+
+function makeCode(nc, nw, fc, fw, best, tries, qmask){
   const b36 = v => A36[Math.min(v, 35)];
   const payload = "U" + String(un().n).padStart(2,"0") + "-S" + sec().n
     + "-N" + b36(nc) + "-W" + b36(nw)
@@ -422,13 +432,14 @@ function makeCode(nc, nw, fc, fw, best, tries){
        decodes to this address, which is what the decoder compares against the
        one the form captured. The check letters cover P too, so it cannot be
        swapped without breaking them. */
-    + "-P" + checkLetters(who());
+    + "-P" + checkLetters(who())
+    + "-Q" + b36pad(qmask || 0, 6);
   return payload + "-K" + checkLetters(payload);
 }
 
 function check(silent){
   const s = sec(), key = rk();
-  let rc = 0, rw = 0, wrong = [], unanswered = [];
+  let rc = 0, rw = 0, wrong = [], unanswered = [], mask = 0;
 
   /* ⭐ A MISS DOES NOT HAND OVER THE ANSWER. The first time a question is wrong
      the student is told only that it is wrong, and invited to go back to their
@@ -436,7 +447,7 @@ function check(silent){
      third blind guess teaches nothing. The worked solution is never shown for a
      question they have not got right: they have to ask for it. Asking costs
      nothing in the code, since the first attempt is already banked. */
-  flat().forEach(it => {
+  flat().forEach((it, qi) => {
     const pick = state[sk(it.id)];
     const wrap = document.getElementById("i"+it.id);
     const opts = wrap.querySelectorAll(".opt");
@@ -448,6 +459,10 @@ function check(silent){
     const oi = it.order[pick], chosen = it.opts[oi], k = sk(it.id);
     if(oi === rightOf(it)){
       if(it.w) rw++; else rc++;
+      /* ⭐ ONE BIT PER QUESTION, in the section's own order. This is what turns a
+         mark into a diagnosis: the code can say WHICH question was missed, not
+         only how many. Recorded for the first attempt only, with the score. */
+      mask += Math.pow(2, qi);
       opts[pick].classList.add("right");
       fb.className = "fb good show";
       fb.textContent = it.w ? "That matches the model answer." : "Correct.";
@@ -481,15 +496,15 @@ function check(silent){
   if(!silent){
     // The first attempt is the honest one, so it is recorded separately and
     // never overwritten. Later attempts only move "best".
-    if(!result[key]) result[key] = {fc: rc, fw: rw, best: rc + rw, tries: 1};
+    if(!result[key]) result[key] = {fc: rc, fw: rw, best: rc + rw, tries: 1, q: mask};
     else {
       result[key].tries++;
       if(rc + rw > result[key].best) result[key].best = rc + rw;
     }
   }
-  const r = result[key] || {fc: rc, fw: rw, best: rc + rw, tries: 1};
+  const r = result[key] || {fc: rc, fw: rw, best: rc + rw, tries: 1, q: mask};
   const nc = nCalc(), nw = nWrit(), n = nc + nw;
-  const code = makeCode(nc, nw, r.fc, r.fw, r.best, r.tries);
+  const code = makeCode(nc, nw, r.fc, r.fw, r.best, r.tries, r.q);
 
   const bits = ["Unit " + un().n + ", section " + s.n,
     "first attempt " + (r.fc + r.fw) + "/" + n
